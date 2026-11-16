@@ -51,16 +51,24 @@ f_plain = F()
 ws = wb.add_worksheet('入力'); ws.set_vba_name('Sheet1')
 ws.activate()
 ws.hide_gridlines(2)
-ws.set_column('A:A', 44, f_plain); ws.set_column('B:C', 15, f_plain); ws.set_column('D:E', 8, f_plain)
-ws.set_column('F:F', 26, f_plain); ws.set_column('G:G', 2, f_plain)
-ws.set_column('H:I', 15, f_plain); ws.set_column('J:J', 8, f_plain)
+ws.set_column('A:A', 40, f_plain); ws.set_column('B:C', 14, f_plain); ws.set_column('D:D', 7, f_plain)
+ws.set_column('E:F', 14, f_plain); ws.set_column('G:G', 7, f_plain); ws.set_column('H:H', 8, f_plain)
+ws.set_column('I:I', 24, f_plain); ws.set_column('J:J', 2, f_plain)
+ws.set_column('K:L', 13, f_plain); ws.set_column('M:M', 6, f_plain)
+ws.set_column('N:O', 13, f_plain); ws.set_column('P:P', 6, f_plain)
 ws.set_row(0, 40)
 ws.write('A1', '工程表 自動作成ツール', f_title)
 ws.insert_button('B1', {'macro': 'MakeSchedule', 'caption': '工程表を作成',
                         'width': 190, 'height': 44, 'x_offset': 4, 'y_offset': 6})
-ws.write('A2', '黄色のセルに入力して［工程表を作成］ボタンを押すと、「工程表」シートに工程表ができます（何度でも作り直せます）。※バー色：セルを塗りつぶすとその色のバーになります（空白なら標準色）。', f_note)
+ws.write('A2', '黄色のセルに入力して［工程表を作成］ボタンを押すと、「工程表」シートに工程表ができます（何度でも作り直せます）。日付が変わったときは、オレンジの「変更後」の欄に入れると、変更前のバーの下に変更後のバーが追加されます。', f_note)
 
-def section(r, text, last=9):
+CHG = '#FCE4D6'
+f_chg_date = F(bg_color=CHG, border=1, border_color='#BFBFBF', num_format='[$-411]yyyy/m/d(aaa)', align='center')
+f_chg_num = F(bg_color=CHG, border=1, border_color='#BFBFBF', align='center')
+f_head_chg = F(bold=True, bg_color='#C65911', font_color='#FFFFFF', border=1, border_color='#A6A6A6', align='center')
+f_bar_chg = F(bg_color='#C00000', border=1, border_color='#A6A6A6')
+
+def section(r, text, last=15):
     ws.merge_range(r, 0, r, last, text, f_sec); ws.set_row(r, 20)
 
 section(3, '■ 工程表の見出し')
@@ -82,46 +90,59 @@ r = 4
 for name, label, val in header_items:
     ws.write(r, 0, label, f_label)
     if isinstance(val, D):
-        ws.merge_range(r, 1, r, 5, '', f_in_date); ws.write_datetime(r, 1, dt.datetime(val.year, val.month, val.day), f_in_date)
+        ws.merge_range(r, 1, r, 6, '', f_in_date); ws.write_datetime(r, 1, dt.datetime(val.year, val.month, val.day), f_in_date)
     else:
-        ws.merge_range(r, 1, r, 5, val, f_in)
+        ws.merge_range(r, 1, r, 6, val, f_in)
     wb.define_name(name, "='入力'!$B$%d" % (r + 1))
     r += 1
 
 r += 1
 section(r, '■ 設定'); r += 1
-ws.write(r, 0, '日数の数え方', f_label); ws.write(r, 1, '暦日', f_in_num)
-ws.data_validation(r, 1, r, 1, {'validate': 'list', 'source': ['暦日', '土日祝除く']})
-ws.write(r, 2, '暦日＝カレンダーどおり／土日祝除く＝土日と「祝日」シートの日を数えない', f_note)
-wb.define_name('cfg_DayMode', "='入力'!$B$%d" % (r + 1)); r += 1
-ws.write(r, 0, 'バーの標準色', f_label); ws.write_blank(r, 1, None, f_bar_def)
-ws.write(r, 2, 'このセルの塗りつぶし色がバーの色になります（作業ごとの色は下の「バー色」列で指定）', f_note)
-wb.define_name('cfg_BarColor', "='入力'!$B$%d" % (r + 1)); r += 1
-ws.write(r, 0, 'バーの太さ（行の高さに対する％）', f_label); ws.write(r, 1, 35, f_in_num)
-ws.write(r, 2, '10～90', f_note)
-wb.define_name('cfg_BarHeight', "='入力'!$B$%d" % (r + 1)); r += 2
+def setting(r, name, label, note):
+    ws.write(r, 0, label, f_label); ws.write(r, 2, note, f_note)
+    wb.define_name(name, "='入力'!$B$%d" % (r + 1))
+setting(r, 'cfg_DayMode', '日数の数え方', '暦日＝カレンダーどおり／土日祝除く＝土日と「祝日」シートの日を数えない')
+ws.write(r, 1, '暦日', f_in_num)
+ws.data_validation(r, 1, r, 1, {'validate': 'list', 'source': ['暦日', '土日祝除く']}); r += 1
+setting(r, 'cfg_BarColor', 'バーの標準色', 'このセルの塗りつぶし色がバーの色になります（作業ごとの色は下の「バー色」列で指定）')
+ws.write_blank(r, 1, None, f_bar_def); r += 1
+setting(r, 'cfg_BarHeight', 'バーの太さ（行の高さに対する％）', '10～90')
+ws.write(r, 1, 35, f_in_num); r += 1
+setting(r, 'cfg_ChangeColor', '変更後バーの色', 'このセルの塗りつぶし色が「変更後」のバーの色になります')
+ws.write_blank(r, 1, None, f_bar_chg); r += 1
+setting(r, 'cfg_OldStyle', '変更前バーの表示', '変更があった作業の、上段（変更前）のバーの描き方：塗りつぶし／点線／白抜き')
+ws.write(r, 1, '塗りつぶし', f_in_num)
+ws.data_validation(r, 1, r, 1, {'validate': 'list', 'source': ['塗りつぶし', '点線', '白抜き']}); r += 2
 
-section(r, '■ 作業項目　（開始日・終了日・日数のうち２つ、または日数だけを入力。作業項目を空欄にすると上の作業の追加期間になります）', 5); r += 1
+section(r, '■ 作業項目　（開始日・終了日・日数のうち２つ、または日数だけを入力。作業項目を空欄にすると上の作業の追加期間になります）'); r += 1
+ws.merge_range(r, 1, r, 3, '変更前（当初の予定）', f_head)
+ws.merge_range(r, 4, r, 6, '変更後（日付が変わったときだけ入力）', f_head_chg)
+ws.merge_range(r, 10, r, 12, '計算結果：変更前', f_head_res)
+ws.merge_range(r, 13, r, 15, '計算結果：変更後', f_head_res)
+r += 1
 hdr_row = r
-for c, t in enumerate(['作業項目', '開始日', '終了日', '日数', 'バー色※', '備考']):
+for c, t in enumerate(['作業項目', '開始日', '終了日', '日数']):
     ws.write(r, c, t, f_head)
-ws.merge_range(r - 1, 7, r - 1, 9, '計算結果（マクロが自動で記入）', f_head_res)
-for c, t in zip(range(7, 10), ['開始日', '終了日', '日数']):
+for c, t in zip((4, 5, 6), ['開始日', '終了日', '日数']):
+    ws.write(r, c, t, f_head_chg)
+ws.write(r, 7, 'バー色※', f_head); ws.write(r, 8, '備考', f_head)
+for c, t in zip(range(10, 16), ['開始日', '終了日', '日数'] * 2):
     ws.write(r, c, t, f_head_res)
 wb.define_name('tbl_Header', "='入力'!$A$%d" % (r + 1))
 ws.set_row(r, 20)
 r += 1
 
 blue = 'blue'
+# (作業項目, 開始日, 終了日, 日数, 色, 備考, 変更後開始日, 変更後終了日, 変更後日数)
 tasks = [
     ('1.詳細検討',),
     ('1.1.計画準備', D(2026, 3, 2), None, 20),
     ('1.2.現地踏査', None, None, 15, None, '日数だけ入力（前の作業の翌日から）'),
     ('1.3.設計条件の検討', D(2026, 4, 1), D(2026, 4, 30)),
-    ('1.4.基本検討', D(2026, 5, 1), D(2026, 5, 31)),
+    ('1.4.基本検討', D(2026, 5, 1), D(2026, 5, 31), None, None, '終了日を延長', None, D(2026, 6, 10)),
     ('1.5.関連施設の検討', D(2026, 6, 11), D(2026, 6, 30)),
     ('1.6.施工計画', D(2026, 7, 1), D(2026, 7, 20)),
-    ('1.7.図面作成', D(2026, 7, 21), D(2026, 8, 10)),
+    ('1.7.図面作成', D(2026, 7, 21), D(2026, 8, 10), None, None, '開始日をずらす', D(2026, 7, 27)),
     ('1.8.数量計算', None, D(2026, 8, 31), 21),
     ('1.9.照査', D(2026, 3, 9), None, None, None, '3回'),
     ('', D(2026, 7, 6)),
@@ -134,34 +155,33 @@ tasks = [
     ('3.打合せ協議（中間５回・計７回）', D(2026, 3, 16), None, 2),
     ('', D(2026, 4, 13), None, 2),
     ('', D(2026, 4, 27), None, 2),
-    ('', D(2026, 5, 18), None, 2),
+    ('', D(2026, 5, 18), None, 2, None, '第4回を延期', D(2026, 5, 25)),
     ('', D(2026, 7, 13), None, 2),
     ('', D(2026, 8, 17), None, 2),
     ('', D(2026, 9, 28), None, 2),
 ]
-first_data = r
+
+def put_date(r, c, v, fmt):
+    if v: ws.write_datetime(r, c, dt.datetime(v.year, v.month, v.day), fmt)
+    else: ws.write_blank(r, c, None, fmt)
+def put_num(r, c, v, fmt):
+    if v: ws.write_number(r, c, v, fmt)
+    else: ws.write_blank(r, c, None, fmt)
+def write_row(r, t):
+    t = list(t) + [None] * (9 - len(t))
+    name, s, e, d, color, note, cs, ce, cd = t
+    ws.write(r, 0, name or '', f_row)
+    put_date(r, 1, s, f_row_date); put_date(r, 2, e, f_row_date); put_num(r, 3, d, f_row_num)
+    put_date(r, 4, cs, f_chg_date); put_date(r, 5, ce, f_chg_date); put_num(r, 6, cd, f_chg_num)
+    ws.write_blank(r, 7, None, f_blue if color == blue else f_row_color)
+    ws.write(r, 8, note or '', f_row)
+    for c in (10, 11, 13, 14): ws.write_blank(r, c, None, f_res_date)
+    for c in (12, 15): ws.write_blank(r, c, None, f_res_num)
+
 for t in tasks:
-    t = list(t) + [None] * (6 - len(t))
-    name, s, e, d, color, note = t
-    ws.write(r, 0, name, f_row)
-    for c, v in ((1, s), (2, e)):
-        if v: ws.write_datetime(r, c, dt.datetime(v.year, v.month, v.day), f_row_date)
-        else: ws.write_blank(r, c, None, f_row_date)
-    if d: ws.write_number(r, 3, d, f_row_num)
-    else: ws.write_blank(r, 3, None, f_row_num)
-    ws.write_blank(r, 4, None, f_blue if color == blue else f_row_color)
-    ws.write(r, 5, note or '', f_row)
-    for c in (7, 8): ws.write_blank(r, c, None, f_res_date)
-    ws.write_blank(r, 9, None, f_res_num)
-    r += 1
+    write_row(r, t); r += 1
 for _ in range(60):   # 追加入力用の空行
-    ws.write_blank(r, 0, None, f_row)
-    for c in (1, 2): ws.write_blank(r, c, None, f_row_date)
-    ws.write_blank(r, 3, None, f_row_num); ws.write_blank(r, 4, None, f_row_color)
-    ws.write_blank(r, 5, None, f_row)
-    for c in (7, 8): ws.write_blank(r, c, None, f_res_date)
-    ws.write_blank(r, 9, None, f_res_num)
-    r += 1
+    write_row(r, ()); r += 1
 
 # ================= 使い方 =================
 wh = wb.add_worksheet('使い方'); wh.set_vba_name('Sheet2')
@@ -188,17 +208,27 @@ lines = [
     ('', '　（打合せを何回も行う場合など。工程表の日数欄には合計日数が出ます）'),
     ('', '・計算した開始日・終了日・日数は、入力シート右側の灰色の欄（計算結果）にも表示されます。'),
     ('', ''),
-    ('h2', '３．バーの色・太さ'),
+    ('h2', '３．日付が変わったとき（変更後のバー）'),
+    ('', '・その作業の行のオレンジの「変更後」の欄に、新しい日付を入れます。変更前の欄はそのまま残してください。'),
+    ('', '・工程表では、その作業の行が上下２段になり、上段に変更前、下段に変更後のバーが描かれます。日数欄も上が変更前、下が変更後です。'),
+    ('', '・変更後 開始日だけ …… 日数は変更前と同じで、日程だけずらす'),
+    ('', '・変更後 終了日だけ …… 開始日は変更前のままで、延長・短縮'),
+    ('', '・変更後 日数だけ ……… 開始日は変更前のままで、日数を変える'),
+    ('', '・変更後 開始日＋終了日（または日数）…… そのとおりの期間'),
+    ('', '・変更後のバーの色は「変更後バーの色」、変更前のバーを点線や白抜きにしたいときは「変更前バーの表示」で選べます。'),
+    ('', '・工程表の「終了予定年月日」は、変更後の予定で表示されます。'),
+    ('', ''),
+    ('h2', '４．バーの色・太さ'),
     ('', '・「バーの標準色」セルの塗りつぶし色が、全部のバーの色になります。'),
     ('', '・作業ごとに色を変えたいときは、その行の「バー色」セルを塗りつぶしてください。'),
     ('', '・「バーの太さ」は行の高さに対する％です（10～90）。'),
     ('', ''),
-    ('h2', '４．日数の数え方'),
+    ('h2', '５．日数の数え方'),
     ('', '・暦日 ……………… 土日も含めてカレンダーどおりに数えます。'),
     ('', '・土日祝除く ……… 土日と「祝日」シートに書いた日を数えません（稼働日）。年末年始休暇なども「祝日」シートに追加できます。'),
     ('', '　※「祝日」シートの日付は2026・2027年分を入れてあります。使う前に内容を確認してください。'),
     ('', ''),
-    ('h2', '５．注意'),
+    ('h2', '６．注意'),
     ('', '・このファイルはマクロ有効ブック（.xlsm）です。開いたときに「コンテンツの有効化」を押してください。'),
     ('', '　インターネットやメールから取得したファイルで「ブロックされました」と出る場合は、ファイルを右クリック →［プロパティ］→「許可する」にチェックしてから開いてください。'),
     ('', '・行や列を挿入しても、見出しの欄は名前（cfg_～）で読み取るので動きます。作業表の見出し行（作業項目・開始日…）の列の並びは変えないでください。'),

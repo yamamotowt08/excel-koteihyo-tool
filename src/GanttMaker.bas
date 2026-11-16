@@ -12,6 +12,12 @@ Attribute VB_Name = "GanttMaker"
 '  ・日数だけ       → 1つ上の期間の翌日から開始
 '  ・開始日だけ     → 1日だけの作業
 '  ・作業項目が空欄で日付がある行 → 上の作業の追加期間（同じ行にバーを追加）
+'
+'  日付が変わったときは「変更後」の欄に入れると、
+'  その作業の行が上下2段になり、上段に変更前、下段に変更後のバーを描きます。
+'  ・変更後 開始日だけ → 日数は変更前と同じでずらす
+'  ・変更後 終了日だけ → 開始日は変更前のまま（延長・短縮）
+'  ・変更後 日数だけ   → 開始日は変更前のまま
 '======================================================================
 Option Explicit
 
@@ -28,43 +34,62 @@ Private Const IC_NAME As Long = 1     ' 作業項目
 Private Const IC_START As Long = 2    ' 開始日
 Private Const IC_END As Long = 3      ' 終了日
 Private Const IC_DAYS As Long = 4     ' 日数
-Private Const IC_COLOR As Long = 5    ' バー色
-Private Const IC_NOTE As Long = 6     ' 備考
-Private Const IC_RES As Long = 8      ' 計算結果（開始日・終了日・日数の3列）
+Private Const IC_CSTART As Long = 5   ' 変更後 開始日
+Private Const IC_CEND As Long = 6     ' 変更後 終了日
+Private Const IC_CDAYS As Long = 7    ' 変更後 日数
+Private Const IC_COLOR As Long = 8    ' バー色
+Private Const IC_NOTE As Long = 9     ' 備考
+Private Const IC_RES As Long = 11     ' 計算結果（開始日・終了日・日数 ×変更前／変更後の6列）
 
 ' 工程表シートの列・行
 Private Const OC_NAME As Long = 1
 Private Const OC_DAYS As Long = 2
 Private Const OC_CHART As Long = 3
+Private Const OR_LEGEND As Long = 14
 Private Const OR_PROJECT As Long = 15
 Private Const OR_PERIOD As Long = 16
 Private Const OR_MONTH As Long = 17
 Private Const OR_TEN As Long = 18
 Private Const OR_FIRST As Long = 19
-Private Const ROW_H As Double = 18
+Private Const ROW_H As Double = 18     ' 通常の行の高さ
+Private Const ROW_H2 As Double = 28    ' 変更がある行（上下2段）の高さ
+
+' バーの描き方
+Private Const STYLE_FILL As Long = 0
+Private Const STYLE_DASH As Long = 1
+Private Const STYLE_OUTLINE As Long = 2
 
 ' Office の定数（参照設定なしで動くよう数値で書く）
 Private Const SHAPE_RECT As Long = 1
 Private Const MSO_TRUE As Long = -1
 Private Const MSO_FALSE As Long = 0
+Private Const LINE_DASH As Long = 4      ' 破線（msoLineDash）
 
 ' 作業（工程表の1行）
 Private itemName() As String
 Private itemNote() As String
-Private itemDays() As Long
+Private itemDays() As Long        ' 変更前の日数合計
+Private itemCDays() As Long       ' 変更後の日数合計
 Private itemColor() As Long
+Private itemHasChg() As Boolean
 Private nItems As Long
 
 ' 期間（バー1本）
 Private perItem() As Long
+Private perHasOrig() As Boolean
 Private perStart() As Date
 Private perEnd() As Date
+Private perHasChg() As Boolean
+Private perCStart() As Date
+Private perCEnd() As Date
 Private perColor() As Long
 Private nPers As Long
 
 Private useWorkDays As Boolean
 Private holRange As Range
 Private monthBase As Date
+Private chgColor As Long
+Private oldStyle As Long
 
 '----------------------------------------------------------------------
 ' 工程表を作成（ボタンから呼ばれるメイン処理）
@@ -104,35 +129,51 @@ Private Sub ReadInput(ByVal wsIn As Worksheet)
     Dim firstRow As Long, lastRow As Long, r As Long, c As Long, n As Long
     Dim nm As String, note As String, defColor As Long, rowColor As Long
     Dim s As Date, e As Date, d As Long, lastEnd As Date, haveLast As Boolean
-    Dim hasS As Boolean, hasE As Boolean, hasD As Boolean
+    Dim hasS As Boolean, hasE As Boolean, hasD As Boolean, hasOrig As Boolean
+    Dim cs As Date, ce As Date, cd As Long
+    Dim hasCS As Boolean, hasCE As Boolean, hasCD As Boolean, hasChg As Boolean
 
     useWorkDays = (CfgText("cfg_DayMode") = WORKDAY_MODE)
     LoadHolidays
     defColor = CellColor(CfgRange("cfg_BarColor"), RGB(0, 0, 0))
+    chgColor = CellColor(CfgRange("cfg_ChangeColor"), RGB(192, 0, 0))
+    Select Case CfgText("cfg_OldStyle")
+        Case "点線": oldStyle = STYLE_DASH
+        Case "白抜き": oldStyle = STYLE_OUTLINE
+        Case Else: oldStyle = STYLE_FILL
+    End Select
 
     If CfgRange("tbl_Header") Is Nothing Then
         Err.Raise vbObjectError + 1, , "入力シートの作業表（名前「tbl_Header」）が見つかりません。"
     End If
     firstRow = CfgRange("tbl_Header").Row + 1
     lastRow = firstRow - 1
-    For c = IC_NAME To IC_DAYS
+    For c = IC_NAME To IC_CDAYS
         r = wsIn.Cells(wsIn.Rows.Count, c).End(xlUp).Row
         If r > lastRow Then lastRow = r
     Next c
-    wsIn.Range(wsIn.Cells(firstRow, IC_RES), wsIn.Cells(lastRow + 200, IC_RES + 2)).ClearContents
+    wsIn.Range(wsIn.Cells(firstRow, IC_RES), wsIn.Cells(lastRow + 200, IC_RES + 5)).ClearContents
 
     n = lastRow - firstRow + 2
     ReDim itemName(1 To n): ReDim itemNote(1 To n)
-    ReDim itemDays(1 To n): ReDim itemColor(1 To n)
-    ReDim perItem(1 To n): ReDim perStart(1 To n)
-    ReDim perEnd(1 To n): ReDim perColor(1 To n)
+    ReDim itemDays(1 To n): ReDim itemCDays(1 To n)
+    ReDim itemColor(1 To n): ReDim itemHasChg(1 To n)
+    ReDim perItem(1 To n): ReDim perHasOrig(1 To n)
+    ReDim perStart(1 To n): ReDim perEnd(1 To n)
+    ReDim perHasChg(1 To n): ReDim perCStart(1 To n): ReDim perCEnd(1 To n)
+    ReDim perColor(1 To n)
     nItems = 0: nPers = 0: haveLast = False
 
     For r = firstRow To lastRow
         nm = CellText(wsIn.Cells(r, IC_NAME))
         hasS = ReadDate(wsIn.Cells(r, IC_START), "開始日", s)
         hasE = ReadDate(wsIn.Cells(r, IC_END), "終了日", e)
-        hasD = ReadDays(wsIn.Cells(r, IC_DAYS), d)
+        hasD = ReadDays(wsIn.Cells(r, IC_DAYS), "日数", d)
+        hasCS = ReadDate(wsIn.Cells(r, IC_CSTART), "変更後の開始日", cs)
+        hasCE = ReadDate(wsIn.Cells(r, IC_CEND), "変更後の終了日", ce)
+        hasCD = ReadDays(wsIn.Cells(r, IC_CDAYS), "変更後の日数", cd)
+        hasOrig = hasS Or hasE Or hasD
+        hasChg = hasCS Or hasCE Or hasCD
 
         If nm <> "" Then
             ' 新しい作業
@@ -141,7 +182,7 @@ Private Sub ReadInput(ByVal wsIn As Worksheet)
             itemNote(nItems) = CellText(wsIn.Cells(r, IC_NOTE))
             itemColor(nItems) = CellColor(wsIn.Cells(r, IC_COLOR), defColor)
             rowColor = itemColor(nItems)
-        ElseIf hasS Or hasE Or hasD Then
+        ElseIf hasOrig Or hasChg Then
             ' 作業項目が空欄 → 上の作業の追加期間
             If nItems = 0 Then RowError r, "作業項目が空欄です。"
             rowColor = CellColor(wsIn.Cells(r, IC_COLOR), itemColor(nItems))
@@ -152,7 +193,8 @@ Private Sub ReadInput(ByVal wsIn As Worksheet)
             End If
         End If
 
-        If hasS Or hasE Or hasD Then
+        ' ---- 変更前（当初）の期間 ----
+        If hasOrig Then
             If hasS And hasE Then
                 If e < s Then RowError r, "終了日が開始日より前になっています。"
             ElseIf hasS And hasD Then
@@ -169,19 +211,58 @@ Private Sub ReadInput(ByVal wsIn As Worksheet)
                 s = e
             End If
             d = CountDays(s, e)
-
-            nPers = nPers + 1
-            perItem(nPers) = nItems
-            perStart(nPers) = s
-            perEnd(nPers) = e
-            perColor(nPers) = rowColor
-            itemDays(nItems) = itemDays(nItems) + d
             lastEnd = e
             haveLast = True
+        End If
 
-            wsIn.Cells(r, IC_RES).Value = s
-            wsIn.Cells(r, IC_RES + 1).Value = e
-            wsIn.Cells(r, IC_RES + 2).Value = d
+        ' ---- 変更後の期間（足りない所は変更前から補う） ----
+        If hasChg Then
+            If hasCS And hasCE Then
+                ' そのまま
+            ElseIf hasCS And hasCD Then
+                ce = AddDays(cs, cd)
+            ElseIf hasCE And hasCD Then
+                cs = SubDays(ce, cd)
+            ElseIf Not hasOrig Then
+                If hasCD Then RowError r, "変更後の開始日か終了日を入力してください。"
+                If hasCS Then ce = cs Else cs = ce
+            ElseIf hasCS Then
+                ce = AddDays(cs, IIf(d < 1, 1, d))      ' 日数はそのままでずらす
+            ElseIf hasCE Then
+                cs = s                                  ' 開始日はそのまま
+            Else
+                cs = s
+                ce = AddDays(cs, cd)
+            End If
+            If ce < cs Then RowError r, "変更後の終了日が開始日より前になっています。"
+            cd = CountDays(cs, ce)
+        End If
+
+        If hasOrig Or hasChg Then
+            nPers = nPers + 1
+            perItem(nPers) = nItems
+            perHasOrig(nPers) = hasOrig
+            perStart(nPers) = s
+            perEnd(nPers) = e
+            perHasChg(nPers) = hasChg
+            perCStart(nPers) = cs
+            perCEnd(nPers) = ce
+            perColor(nPers) = rowColor
+            If hasOrig Then
+                itemDays(nItems) = itemDays(nItems) + d
+                wsIn.Cells(r, IC_RES).Value = s
+                wsIn.Cells(r, IC_RES + 1).Value = e
+                wsIn.Cells(r, IC_RES + 2).Value = d
+            End If
+            If hasChg Then
+                itemHasChg(nItems) = True
+                itemCDays(nItems) = itemCDays(nItems) + cd
+                wsIn.Cells(r, IC_RES + 3).Value = cs
+                wsIn.Cells(r, IC_RES + 4).Value = ce
+                wsIn.Cells(r, IC_RES + 5).Value = cd
+            ElseIf hasOrig Then
+                itemCDays(nItems) = itemCDays(nItems) + d
+            End If
         End If
     Next r
 End Sub
@@ -190,17 +271,36 @@ End Sub
 ' 工程表シートを描く
 '----------------------------------------------------------------------
 Private Sub DrawSchedule(ByVal ws As Worksheet)
-    Dim i As Long, k As Long, c As Long, r As Long
-    Dim minS As Date, maxE As Date, nMonths As Long
-    Dim lastCol As Long, lastRow As Long, colW As Double
-    Dim c1 As Long, c2 As Long, rg As Range, shp As Shape
-    Dim x1 As Double, x2 As Double, barH As Double, pct As Double
+    Dim i As Long, k As Long, c As Long, r As Long, it As Long
+    Dim minS As Date, maxE As Date, curS As Date, curE As Date, first As Boolean
+    Dim nMonths As Long, lastCol As Long, lastRow As Long, colW As Double
+    Dim c1 As Long, c2 As Long, rg As Range, shp As Shape, anyChg As Boolean
+    Dim barH As Double, pct As Double, rowTop As Double, rowHt As Double
+    Dim s As Date, e As Date, dTop As String, dBot As String
 
-    minS = perStart(1): maxE = perEnd(1)
-    For i = 2 To nPers
-        If perStart(i) < minS Then minS = perStart(i)
-        If perEnd(i) > maxE Then maxE = perEnd(i)
+    ' 表示する範囲（全バー）と、開始年月日・終了予定年月日（変更後の予定）
+    first = True
+    For i = 1 To nPers
+        If perHasOrig(i) Then
+            If first Or perStart(i) < minS Then minS = perStart(i)
+            If first Or perEnd(i) > maxE Then maxE = perEnd(i)
+            first = False
+        End If
+        If perHasChg(i) Then
+            If first Or perCStart(i) < minS Then minS = perCStart(i)
+            If first Or perCEnd(i) > maxE Then maxE = perCEnd(i)
+            first = False
+            s = perCStart(i): e = perCEnd(i)
+        Else
+            s = perStart(i): e = perEnd(i)
+        End If
+        If i = 1 Or s < curS Then curS = s
+        If i = 1 Or e > curE Then curE = e
     Next i
+    For i = 1 To nItems
+        If itemHasChg(i) Then anyChg = True
+    Next i
+
     monthBase = DateSerial(Year(minS), Month(minS), 1)
     nMonths = (Year(maxE) - Year(minS)) * 12 + Month(maxE) - Month(minS) + 1
     lastCol = OC_CHART + nMonths * 3          ' 備考の列
@@ -245,6 +345,15 @@ Private Sub DrawSchedule(ByVal ws As Worksheet)
 
     ws.Cells(13, 1).Value = CfgText("cfg_Preface")
 
+    ' 変更がある場合は凡例
+    If anyChg Then
+        With MergeRow(ws, OR_LEGEND, SpanStart(ws, lastCol, 50), lastCol)
+            .Cells(1, 1).Value = "（上段：変更前　下段：変更後）"
+            .HorizontalAlignment = xlRight
+            .Font.Color = chgColor
+        End With
+    End If
+
     ' ---- 業務名・開始・終了 ----
     ws.Cells(OR_PROJECT, OC_NAME).Value = "業務名"
     With MergeRow(ws, OR_PROJECT, OC_DAYS, lastCol)
@@ -258,7 +367,7 @@ Private Sub DrawSchedule(ByVal ws As Worksheet)
     c2 = SpanEnd(ws, c1, 14, lastCol - 1)
     ws.Cells(OR_PERIOD, OC_NAME).Value = "開始年月日"
     With MergeRow(ws, OR_PERIOD, OC_DAYS, c1 - 1)
-        .Cells(1, 1).Value = minS
+        .Cells(1, 1).Value = curS
         .NumberFormat = DATE_FMT
         .HorizontalAlignment = xlCenter
     End With
@@ -268,7 +377,7 @@ Private Sub DrawSchedule(ByVal ws As Worksheet)
         .ShrinkToFit = True
     End With
     With MergeRow(ws, OR_PERIOD, c2 + 1, lastCol)
-        .Cells(1, 1).Value = maxE
+        .Cells(1, 1).Value = curE
         .NumberFormat = DATE_FMT
         .HorizontalAlignment = xlCenter
     End With
@@ -317,10 +426,22 @@ Private Sub DrawSchedule(ByVal ws As Worksheet)
     For i = 1 To nItems
         r = OR_FIRST + i - 1
         ws.Cells(r, OC_NAME).Value = itemName(i)
-        If itemDays(i) > 0 Then ws.Cells(r, OC_DAYS).Value = itemDays(i)
         ws.Cells(r, lastCol).Value = itemNote(i)
+        If itemHasChg(i) Then
+            ' 日数は上段に変更前、下段に変更後
+            ws.Rows(r).RowHeight = ROW_H2
+            If itemDays(i) > 0 Then dTop = CStr(itemDays(i)) Else dTop = "－"
+            dBot = CStr(itemCDays(i))
+            With ws.Cells(r, OC_DAYS)
+                .Value = dTop & vbLf & dBot
+                .WrapText = True
+                .Characters(Len(dTop) + 2, Len(dBot)).Font.Color = chgColor
+            End With
+        Else
+            ws.Rows(r).RowHeight = ROW_H
+            If itemDays(i) > 0 Then ws.Cells(r, OC_DAYS).Value = itemDays(i)
+        End If
     Next i
-    ws.Range(ws.Rows(OR_FIRST), ws.Rows(lastRow)).RowHeight = ROW_H
     ws.Range(ws.Cells(OR_FIRST, OC_NAME), ws.Cells(lastRow, OC_NAME)).ShrinkToFit = True
     ws.Range(ws.Cells(OR_FIRST, lastCol), ws.Cells(lastRow, lastCol)).ShrinkToFit = True
     ws.Range(ws.Cells(OR_FIRST, OC_DAYS), ws.Cells(lastRow, OC_DAYS)).HorizontalAlignment = xlCenter
@@ -353,25 +474,62 @@ Private Sub DrawSchedule(ByVal ws As Worksheet)
     If pct < 10 Or pct > 90 Then pct = 35
     barH = ROW_H * pct / 100
     For i = 1 To nPers
-        r = OR_FIRST + perItem(i) - 1
-        x1 = DateX(ws, perStart(i), False)
-        x2 = DateX(ws, perEnd(i), True)
-        If x2 - x1 < 2 Then x2 = x1 + 2
-        With ws.Cells(r, OC_CHART)
-            Set shp = ws.Shapes.AddShape(SHAPE_RECT, x1, .Top + (.Height - barH) / 2, x2 - x1, barH)
-        End With
-        With shp
-            .Name = "Bar" & i
-            .Fill.Visible = MSO_TRUE
-            .Fill.Solid
-            .Fill.ForeColor.RGB = perColor(i)
-            .Line.Visible = MSO_FALSE
-            .Shadow.Visible = MSO_FALSE
-            .Placement = xlMoveAndSize
-        End With
+        it = perItem(i)
+        r = OR_FIRST + it - 1
+        rowTop = ws.Rows(r).Top
+        rowHt = ws.Rows(r).Height
+        If Not itemHasChg(it) Then
+            DrawBar ws, i, "", perStart(i), perEnd(i), rowTop + rowHt / 2, barH, perColor(i), STYLE_FILL
+        Else
+            ' 上段：変更前　下段：変更後（変更のない期間はそのまま下段にも描く）
+            If perHasOrig(i) Then
+                DrawBar ws, i, "Old", perStart(i), perEnd(i), rowTop + rowHt * 0.3, barH, perColor(i), oldStyle
+            End If
+            If perHasChg(i) Then
+                DrawBar ws, i, "New", perCStart(i), perCEnd(i), rowTop + rowHt * 0.72, barH, chgColor, STYLE_FILL
+            Else
+                DrawBar ws, i, "New", perStart(i), perEnd(i), rowTop + rowHt * 0.72, barH, chgColor, STYLE_FILL
+            End If
+        End If
     Next i
 
     SetupPrint ws, lastRow, lastCol
+End Sub
+
+' バーを1本描く（yMid はバーの縦の中心）
+Private Sub DrawBar(ByVal ws As Worksheet, ByVal idx As Long, ByVal tag As String, _
+                    ByVal s As Date, ByVal e As Date, ByVal yMid As Double, ByVal h As Double, _
+                    ByVal color As Long, ByVal style As Long)
+    Dim x1 As Double, x2 As Double, shp As Shape
+
+    x1 = DateX(ws, s, False)
+    x2 = DateX(ws, e, True)
+    If x2 - x1 < 2 Then x2 = x1 + 2
+
+    If style = STYLE_DASH Then
+        Set shp = ws.Shapes.AddLine(x1, yMid, x2, yMid)
+        shp.Line.ForeColor.RGB = color
+        shp.Line.Weight = h * 0.6
+        shp.Line.DashStyle = LINE_DASH
+    Else
+        Set shp = ws.Shapes.AddShape(SHAPE_RECT, x1, yMid - h / 2, x2 - x1, h)
+        If style = STYLE_OUTLINE Then
+            shp.Fill.Visible = MSO_TRUE
+            shp.Fill.Solid
+            shp.Fill.ForeColor.RGB = RGB(255, 255, 255)
+            shp.Line.Visible = MSO_TRUE
+            shp.Line.ForeColor.RGB = color
+            shp.Line.Weight = 1
+        Else
+            shp.Fill.Visible = MSO_TRUE
+            shp.Fill.Solid
+            shp.Fill.ForeColor.RGB = color
+            shp.Line.Visible = MSO_FALSE
+        End If
+        shp.Shadow.Visible = MSO_FALSE
+    End If
+    shp.Name = "Bar" & idx & tag
+    shp.Placement = xlMoveAndSize
 End Sub
 
 ' 日付 → 工程表上の横位置（ポイント）。atEnd=True ならその日の終わり
@@ -487,16 +645,16 @@ Private Function ReadDate(ByVal cell As Range, ByVal label As String, ByRef resu
     ReadDate = True
 End Function
 
-Private Function ReadDays(ByVal cell As Range, ByRef result As Long) As Boolean
+Private Function ReadDays(ByVal cell As Range, ByVal label As String, ByRef result As Long) As Boolean
     Dim v As Variant
     v = cell.Value
-    If IsError(v) Then RowError cell.Row, "日数がエラー値になっています。"
+    If IsError(v) Then RowError cell.Row, label & "がエラー値になっています。"
     If IsEmpty(v) Then Exit Function
     If VarType(v) = vbString Then
         If Trim$(v) = "" Then Exit Function
     End If
-    If Not IsNumeric(v) Then RowError cell.Row, "日数は数字で入力してください。"
-    If CDbl(v) < 1 Then RowError cell.Row, "日数は1以上で入力してください。"
+    If Not IsNumeric(v) Then RowError cell.Row, label & "は数字で入力してください。"
+    If CDbl(v) < 1 Then RowError cell.Row, label & "は1以上で入力してください。"
     result = -Int(-CDbl(v))
     ReadDays = True
 End Function
